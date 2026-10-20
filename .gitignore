@@ -1,0 +1,113 @@
+
+---
+
+# 2. `.gitignore`
+
+Replace everything inside `.gitignore` with this:
+
+```gitignore
+# ==============================
+# Node.js / React / Vite
+# ==============================
+
+node_modules/
+dist/
+build/
+.vite/
+.npm/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+
+# ==============================
+# Python / Flask
+# ==============================
+
+.venv/
+venv/
+env/
+ENV/
+
+__pycache__/
+*.py[cod]
+*$py.class
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+*.pyo
+*.pyd
+
+# Python environment files
+.python-version
+
+
+# ==============================
+# Secrets
+# ==============================
+
+*.env
+*.key
+*.pem
+secrets.json
+credentials.json
+
+
+# ==============================
+# IDE / Editor
+# ==============================
+
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+.idea/
+*.swp
+*.swo
+
+
+# ==============================
+# Operating System
+# ==============================
+
+.DS_Store
+Thumbs.db
+desktop.ini
+
+
+# ==============================
+# Logs
+# ==============================
+
+*.log
+logs/
+
+
+# ==============================
+# Build / Temporary Files
+# ==============================
+
+tmp/
+temp/
+.cache/
+coverage/
+
+
+# ==============================
+# Arduino
+# ==============================
+
+*.bin
+*.elf
+*.hex
+*.map
