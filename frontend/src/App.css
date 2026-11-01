@@ -1,0 +1,506 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Inter, Arial, sans-serif;
+  background: #07111f;
+  color: #f4f7fb;
+}
+
+button {
+  font: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* =========================
+   MAIN APP FRAME
+========================= */
+
+.app {
+  min-height: 100vh;
+  padding: 30px;
+  max-width: 1500px;
+  margin: auto;
+}
+
+/* =========================
+   TOP BAR
+========================= */
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 20px;
+  margin-bottom: 30px;
+}
+
+.eyebrow,
+.machine-label {
+  font-size: 12px;
+  letter-spacing: 2px;
+  opacity: 0.65;
+  font-weight: 700;
+}
+
+h1 {
+  margin: 7px 0;
+  font-size: clamp(28px, 4vw, 48px);
+  line-height: 1.1;
+}
+
+h2 {
+  margin: 5px 0;
+}
+
+.topbar p {
+  opacity: 0.65;
+}
+
+/* =========================
+   STATUS
+========================= */
+
+.system-status,
+.status-badge {
+  padding: 10px 15px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.system-status {
+  background: rgba(255, 255, 255, 0.06);
+  white-space: nowrap;
+}
+
+.running {
+  color: #6dffad;
+}
+
+.standby {
+  color: #ffd166;
+}
+
+.fault {
+  color: #ff6b6b;
+}
+
+.offline {
+  color: #8994a6;
+}
+
+/* =========================
+   SUMMARY
+========================= */
+
+.summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 15px;
+  margin-bottom: 20px;
+}
+
+.summary-card,
+.machine-card,
+.communication-panel,
+.events-panel {
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 22px;
+  backdrop-filter: blur(15px);
+  -webkit-backdrop-filter: blur(15px);
+}
+
+.summary-card {
+  padding: 20px;
+}
+
+.summary-card span,
+.metric span,
+.machine-info span,
+.communication-grid span {
+  display: block;
+  font-size: 12px;
+  opacity: 0.6;
+  margin-bottom: 7px;
+}
+
+.summary-card strong {
+  font-size: 24px;
+}
+
+/* =========================
+   MACHINE SECTION
+========================= */
+
+.machines {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 20px;
+}
+
+.machine-card {
+  padding: 24px;
+  transition: transform 0.2s ease, border-color 0.2s ease;
+}
+
+.machine-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.machine-header,
+.panel-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 15px;
+}
+
+.machine-header {
+  margin-bottom: 25px;
+}
+
+/* =========================
+   METRICS
+========================= */
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.metric {
+  padding: 15px;
+  border-radius: 15px;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.metric strong {
+  font-size: 20px;
+}
+
+.value-green {
+  color: #6dffad;
+}
+
+.value-gray {
+  color: #a9b1bf;
+}
+
+/* =========================
+   MACHINE INFORMATION
+========================= */
+
+.machine-info {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-top: 15px;
+}
+
+.machine-info > div {
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* =========================
+   FAULT / ALERT
+========================= */
+
+.fault-box,
+.alert {
+  margin-top: 15px;
+  padding: 14px;
+  border-radius: 14px;
+  background: rgba(255, 80, 80, 0.12);
+  border: 1px solid rgba(255, 80, 80, 0.3);
+  color: #ff9292;
+}
+
+.alert {
+  margin-bottom: 20px;
+}
+
+/* =========================
+   CONTROL BUTTONS
+========================= */
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.btn {
+  border: 0;
+  border-radius: 12px;
+  padding: 11px 15px;
+  cursor: pointer;
+  color: white;
+  background: #25334a;
+  transition:
+    transform 0.15s ease,
+    opacity 0.15s ease,
+    filter 0.15s ease;
+}
+
+.btn:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.1);
+}
+
+.btn:active {
+  transform: scale(0.97);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.btn.primary {
+  background: #16875a;
+}
+
+.btn.danger {
+  background: #a93645;
+}
+
+.btn.warning {
+  background: #8b6a18;
+}
+
+/* =========================
+   COMMUNICATION PANEL
+========================= */
+
+.communication-panel,
+.events-panel {
+  padding: 22px;
+  margin-top: 20px;
+}
+
+.communication-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.communication-grid > div {
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 14px;
+}
+
+/* =========================
+   EVENTS
+========================= */
+
+.events {
+  margin-top: 15px;
+}
+
+.event {
+  display: grid;
+  grid-template-columns: 130px 1fr auto;
+  gap: 15px;
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.event:last-child {
+  border-bottom: none;
+}
+
+.event span {
+  opacity: 0.6;
+}
+
+.event small {
+  opacity: 0.45;
+}
+
+.empty {
+  opacity: 0.5;
+  padding: 20px 0;
+}
+
+/* =========================
+   FOOTER
+========================= */
+
+footer {
+  display: flex;
+  justify-content: space-between;
+  opacity: 0.5;
+  padding: 25px 0 10px;
+  font-size: 12px;
+}
+
+/* =========================
+   MOTOR STATUS
+========================= */
+
+.motor-running {
+  color: #6dffad;
+  font-weight: 700;
+}
+
+.motor-stopped {
+  color: #a9b1bf;
+  font-weight: 700;
+}
+
+.motor-fault {
+  color: #ff6b6b;
+  font-weight: 700;
+}
+
+/* =========================
+   RESPONSIVE — TABLET
+========================= */
+
+@media (max-width: 1100px) {
+
+  .summary {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .communication-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+}
+
+/* =========================
+   RESPONSIVE — MOBILE
+========================= */
+
+@media (max-width: 900px) {
+
+  .app {
+    padding: 20px;
+  }
+
+  .machines {
+    grid-template-columns: 1fr;
+  }
+
+  .machine-info {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+}
+
+/* =========================
+   SMALL MOBILE
+========================= */
+
+@media (max-width: 600px) {
+
+  .app {
+    padding: 15px;
+  }
+
+  .topbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .system-status {
+    width: fit-content;
+  }
+
+  .summary {
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+
+  .summary-card {
+    padding: 15px;
+  }
+
+  .summary-card strong {
+    font-size: 20px;
+  }
+
+  .machines {
+    grid-template-columns: 1fr;
+  }
+
+  .machine-card {
+    padding: 18px;
+  }
+
+  .metrics {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .machine-info {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .communication-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .event {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  footer {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .controls {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .btn {
+    width: 100%;
+  }
+}
+
+/* =========================
+   VERY SMALL PHONES
+========================= */
+
+@media (max-width: 380px) {
+
+  .summary {
+    grid-template-columns: 1fr;
+  }
+
+  .metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .machine-info {
+    grid-template-columns: 1fr;
+  }
+
+  .communication-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .controls {
+    grid-template-columns: 1fr;
+  }
+
+  h1 {
+    font-size: 30px;
+  }
+
+}

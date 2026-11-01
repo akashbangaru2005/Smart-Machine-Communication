@@ -3,90 +3,157 @@
 #include <DHT.h>
 
 // ============================================================
-// MACHINE 02
-// SMART MACHINE COMMUNICATION SYSTEM
-// MODBUS RTU SLAVE
+// MACHINE 02 - SMART MACHINE COMMUNICATION SYSTEM
+// RS-485 SLAVE
 // ============================================================
 
 // -------------------- Wi-Fi --------------------
+// Put your existing Wi-Fi credentials here.
 const char* WIFI_SSID = "Trisha's F15";
 const char* WIFI_PASSWORD = "7095197758";
 
 // -------------------- MQTT --------------------
-const char* MQTT_SERVER = "test.mosquitto.org";
+const char* MQTT_SERVER = "broker.hivemq.com";
 const int MQTT_PORT = 1883;
 
-const char* MQTT_TELEMETRY =
+const char* TOPIC_TELEMETRY =
   "smart-machine/machine02/telemetry";
 
-const char* MQTT_STATUS =
+const char* TOPIC_STATUS =
   "smart-machine/machine02/status";
 
-const char* MQTT_EVENT =
+const char* TOPIC_EVENT =
   "smart-machine/machine02/event";
+
+const char* TOPIC_CONTROL =
+  "smart-machine/machine02/control";
+
+const char* TOPIC_COMMUNICATION =
+  "smart-machine/system/communication";
+
+const char* TOPIC_FAILOVER =
+  "smart-machine/system/failover";
 
 // -------------------- DHT11 --------------------
 #define DHT_PIN 4
 #define DHT_TYPE DHT11
 
-DHT dht(DHT_PIN, DHT_TYPE);
+DHT dht(
+  DHT_PIN,
+  DHT_TYPE
+);
 
 // -------------------- Hardware --------------------
-#define LED_PIN   2
-#define RELAY_PIN 23
+#define LED_PIN     2
+#define BUTTON_PIN  18
+#define RELAY_PIN   23
 
 // -------------------- RS-485 --------------------
 #define RS485_RX    16
 #define RS485_TX    17
 #define RS485_DE_RE 21
 
-HardwareSerial RS485Serial(2);
-
-// Modbus Slave ID
 #define SLAVE_ID 2
 
+HardwareSerial RS485Serial(2);
+
 // -------------------- Network --------------------
-WiFiClient espClient;
-PubSubClient mqttClient(espClient);
+WiFiClient wifiClient;
+
+PubSubClient mqttClient(
+  wifiClient
+);
 
 // ============================================================
-// VARIABLES
+// STATE
 // ============================================================
-
-float temperature = 0.0;
-float humidity = 0.0;
 
 bool motorState = false;
 bool ledState = false;
 
+bool autoMode = true;
+
+bool manualStop = false;
+
 bool mqttOK = false;
 
-// Timers
+float temperature = 0.0;
+float humidity = 0.0;
+
+uint16_t heartbeat = 0;
+
+uint8_t currentMode = 0;
+uint8_t faultCode = 0;
+
+// Mode:
+// 0 = STANDBY
+// 1 = ACTIVE
+// 2 = SAFETY STOP
+// 3 = MANUAL STOP
+
+// Fault:
+// 0 = NONE
+// 1 = COMMUNICATION FAULT
+// 2 = MOTOR FAULT
+
+// ============================================================
+// TIMERS
+// ============================================================
+
+unsigned long lastMasterHeartbeat = 0;
 unsigned long lastSensorRead = 0;
-unsigned long lastWiFiAttempt = 0;
-unsigned long lastMQTTAttempt = 0;
 unsigned long lastTelemetry = 0;
 
+unsigned long lastWiFiAttempt = 0;
+unsigned long lastMQTTAttempt = 0;
+
+unsigned long lastButtonTime = 0;
+
+const unsigned long MASTER_TIMEOUT = 3000;
+
 const unsigned long SENSOR_INTERVAL = 2000;
+const unsigned long TELEMETRY_INTERVAL = 1000;
+
 const unsigned long WIFI_RETRY_INTERVAL = 10000;
 const unsigned long MQTT_RETRY_INTERVAL = 5000;
-const unsigned long TELEMETRY_INTERVAL = 3000;
+
+const unsigned long BUTTON_DEBOUNCE = 80;
 
 // ============================================================
-// CRC16 MODBUS
+// BUTTON
 // ============================================================
 
-uint16_t modbusCRC(uint8_t* data, uint8_t length)
+bool lastButtonReading = HIGH;
+bool stableButtonState = HIGH;
+
+// ============================================================
+// CRC
+// ============================================================
+
+uint16_t modbusCRC(
+  uint8_t* data,
+  uint8_t length
+)
 {
   uint16_t crc = 0xFFFF;
 
-  for (uint8_t pos = 0; pos < length; pos++)
+  for (
+    uint8_t pos = 0;
+    pos < length;
+    pos++
+  )
   {
     crc ^= data[pos];
 
-    for (uint8_t i = 0; i < 8; i++)
+    for (
+      uint8_t i = 0;
+      i < 8;
+      i++
+    )
     {
-      if (crc & 0x0001)
+      if (
+        crc & 0x0001
+      )
       {
         crc >>= 1;
         crc ^= 0xA001;
@@ -102,322 +169,1080 @@ uint16_t modbusCRC(uint8_t* data, uint8_t length)
 }
 
 // ============================================================
-// RS-485
+// RS-485 MODE
 // ============================================================
 
-void rs485ReceiveMode()
+void rs485Transmit()
 {
-  digitalWrite(RS485_DE_RE, LOW);
+  digitalWrite(
+    RS485_DE_RE,
+    HIGH
+  );
 }
 
-void rs485TransmitMode()
+void rs485Receive()
 {
-  digitalWrite(RS485_DE_RE, HIGH);
+  digitalWrite(
+    RS485_DE_RE,
+    LOW
+  );
 }
 
 // ============================================================
-// HARDWARE CONTROL
+// MOTOR
 // ============================================================
 
-void setMotor(bool state)
+void setMotor(
+  bool state
+)
 {
-  motorState = state;
+  motorState =
+    state;
+
+  // ACTIVE LOW RELAY
 
   digitalWrite(
     RELAY_PIN,
-    state ? HIGH : LOW
+    state ? LOW : HIGH
   );
 
-  Serial.print("Machine 02 Motor: ");
-  Serial.println(state ? "ON" : "OFF");
-}
-
-void setLED(bool state)
-{
-  ledState = state;
-
-  digitalWrite(
-    LED_PIN,
-    state ? HIGH : LOW
+  Serial.print(
+    "Machine 02 Motor: "
   );
 
-  Serial.print("Machine 02 LED: ");
-  Serial.println(state ? "ON" : "OFF");
+  Serial.println(
+    state ? "ON" : "OFF"
+  );
 }
 
 // ============================================================
-// DHT11
+// MODE
 // ============================================================
 
-void readDHT11()
+void applyMode(
+  uint8_t mode
+)
 {
-  float h = dht.readHumidity();
-  float t = dht.readTemperature();
+  currentMode =
+    mode;
 
-  if (isnan(h) || isnan(t))
+  // ----------------------------------------------------------
+  // STANDBY
+  // ----------------------------------------------------------
+
+  if (
+    mode == 0
+  )
   {
-    Serial.println("Machine 02 DHT11 read failed.");
-    return;
+    if (!manualStop)
+    {
+      setMotor(false);
+    }
+
+    faultCode = 0;
   }
 
-  temperature = t;
-  humidity = h;
+  // ----------------------------------------------------------
+  // ACTIVE
+  // ----------------------------------------------------------
 
-  Serial.print("Machine 02 Temperature: ");
-  Serial.print(temperature);
-  Serial.println(" C");
+  else if (
+    mode == 1
+  )
+  {
+    faultCode = 0;
 
-  Serial.print("Machine 02 Humidity: ");
-  Serial.print(humidity);
-  Serial.println(" %");
+    if (!manualStop)
+    {
+      setMotor(true);
+    }
+    else
+    {
+      setMotor(false);
+
+      currentMode =
+        3;
+    }
+  }
+
+  // ----------------------------------------------------------
+  // SAFETY STOP
+  // ----------------------------------------------------------
+
+  else if (
+    mode == 2
+  )
+  {
+    setMotor(false);
+
+    faultCode = 1;
+
+    autoMode = false;
+
+    manualStop = false;
+  }
+
+  // ----------------------------------------------------------
+  // MANUAL STOP
+  // ----------------------------------------------------------
+
+  else if (
+    mode == 3
+  )
+  {
+    setMotor(false);
+
+    faultCode = 0;
+
+    manualStop = true;
+  }
 }
 
 // ============================================================
 // WIFI
 // ============================================================
 
-void handleWiFi()
+void connectWiFi()
 {
-  if (WiFi.status() == WL_CONNECTED)
-  {
+  if (
+    WiFi.status() ==
+    WL_CONNECTED
+  )
     return;
-  }
 
-  unsigned long now = millis();
-
-  if (now - lastWiFiAttempt < WIFI_RETRY_INTERVAL)
-  {
+  if (
+    millis() -
+    lastWiFiAttempt <
+    WIFI_RETRY_INTERVAL
+  )
     return;
-  }
 
-  lastWiFiAttempt = now;
+  lastWiFiAttempt =
+    millis();
 
-  Serial.println("Trying Wi-Fi...");
+  Serial.println(
+    "Connecting to Wi-Fi..."
+  );
 
-  WiFi.mode(WIFI_STA);
+  WiFi.mode(
+    WIFI_STA
+  );
+
   WiFi.begin(
     WIFI_SSID,
     WIFI_PASSWORD
   );
+
+  unsigned long start =
+    millis();
+
+  while (
+    WiFi.status() !=
+    WL_CONNECTED &&
+    millis() - start < 8000
+  )
+  {
+    delay(250);
+
+    Serial.print(".");
+  }
+
+  Serial.println();
+
+  if (
+    WiFi.status() ==
+    WL_CONNECTED
+  )
+  {
+    Serial.println(
+      "Wi-Fi connected."
+    );
+
+    Serial.print(
+      "IP: "
+    );
+
+    Serial.println(
+      WiFi.localIP()
+    );
+  }
+}
+
+// ============================================================
+// MQTT CALLBACK
+// ============================================================
+
+void mqttCallback(
+  char* topic,
+  byte* payload,
+  unsigned int length
+)
+{
+  String message;
+
+  for (
+    unsigned int i = 0;
+    i < length;
+    i++
+  )
+  {
+    message +=
+      (char)payload[i];
+  }
+
+  message.trim();
+
+  if (
+    String(topic) !=
+    TOPIC_CONTROL
+  )
+    return;
+
+  Serial.print(
+    "MQTT COMMAND: "
+  );
+
+  Serial.println(
+    message
+  );
+
+  // ----------------------------------------------------------
+  // MOTOR ON
+  // ----------------------------------------------------------
+
+  if (
+    message ==
+    "MOTOR_ON"
+  )
+  {
+    manualStop = false;
+
+    autoMode = false;
+
+    currentMode = 1;
+
+    setMotor(true);
+
+    mqttClient.publish(
+      TOPIC_EVENT,
+      "MACHINE 02 MOTOR ON"
+    );
+  }
+
+  // ----------------------------------------------------------
+  // MOTOR OFF
+  // ----------------------------------------------------------
+
+  else if (
+    message ==
+    "MOTOR_OFF"
+  )
+  {
+    manualStop = true;
+
+    autoMode = false;
+
+    currentMode = 3;
+
+    setMotor(false);
+
+    mqttClient.publish(
+      TOPIC_EVENT,
+      "MACHINE 02 MOTOR OFF"
+    );
+  }
+
+  // ----------------------------------------------------------
+  // LED
+  // ----------------------------------------------------------
+
+  else if (
+    message ==
+    "LED_ON"
+  )
+  {
+    ledState = true;
+
+    digitalWrite(
+      LED_PIN,
+      HIGH
+    );
+  }
+
+  else if (
+    message ==
+    "LED_OFF"
+  )
+  {
+    ledState = false;
+
+    digitalWrite(
+      LED_PIN,
+      LOW
+    );
+  }
+
+  // ----------------------------------------------------------
+  // SAFETY RESET
+  // ----------------------------------------------------------
+
+  else if (
+    message ==
+    "SAFETY_RESET"
+  )
+  {
+    faultCode = 0;
+
+    manualStop = false;
+
+    autoMode = true;
+
+    currentMode = 0;
+
+    setMotor(false);
+
+    mqttClient.publish(
+      TOPIC_EVENT,
+      "MACHINE 02 SAFETY RESET"
+    );
+  }
 }
 
 // ============================================================
 // MQTT
 // ============================================================
 
-void handleMQTT()
+void connectMQTT()
 {
-  if (WiFi.status() != WL_CONNECTED)
-  {
+  if (
+    WiFi.status() !=
+    WL_CONNECTED
+  )
     return;
-  }
 
-  if (mqttClient.connected())
-  {
-    mqttClient.loop();
+  if (
+    mqttClient.connected()
+  )
     return;
-  }
 
-  unsigned long now = millis();
-
-  if (now - lastMQTTAttempt < MQTT_RETRY_INTERVAL)
-  {
+  if (
+    millis() -
+    lastMQTTAttempt <
+    MQTT_RETRY_INTERVAL
+  )
     return;
-  }
 
-  lastMQTTAttempt = now;
+  lastMQTTAttempt =
+    millis();
 
-  Serial.println("Connecting MQTT...");
+  String clientID =
+    "SmartMachine02-" +
+    String(
+      (uint32_t)
+      ESP.getEfuseMac(),
+      HEX
+    );
 
-  String clientID = "Machine02-";
-  clientID += String((uint32_t)ESP.getEfuseMac(), HEX);
+  Serial.println(
+    "Connecting to MQTT..."
+  );
 
-  if (mqttClient.connect(clientID.c_str()))
+  if (
+    mqttClient.connect(
+      clientID.c_str()
+    )
+  )
   {
     mqttOK = true;
 
-    Serial.println("Machine 02 MQTT connected.");
+    mqttClient.subscribe(
+      TOPIC_CONTROL
+    );
 
     mqttClient.publish(
-      MQTT_STATUS,
-      "Machine 02 ONLINE",
-      true
+      TOPIC_STATUS,
+      "ONLINE"
+    );
+
+    mqttClient.publish(
+      TOPIC_COMMUNICATION,
+      "MACHINE02_MQTT_ONLINE"
+    );
+
+    Serial.println(
+      "MQTT connected."
     );
   }
   else
   {
     mqttOK = false;
 
-    Serial.print("MQTT connection failed. State: ");
-    Serial.println(mqttClient.state());
+    Serial.print(
+      "MQTT failed: "
+    );
+
+    Serial.println(
+      mqttClient.state()
+    );
   }
 }
 
 // ============================================================
-// MQTT TELEMETRY
+// DHT
 // ============================================================
 
-void publishTelemetry()
+void readDHT()
 {
-  if (!mqttClient.connected())
+  float h =
+    dht.readHumidity();
+
+  float t =
+    dht.readTemperature();
+
+  if (
+    isnan(h) ||
+    isnan(t)
+  )
   {
+    Serial.println(
+      "Machine 02 DHT11 read failed."
+    );
+
     return;
   }
 
-  String payload = "{";
+  temperature =
+    t;
 
-  payload += "\"machine\":2,";
-  payload += "\"temperature\":" +
-             String(temperature, 2) + ",";
-  payload += "\"humidity\":" +
-             String(humidity, 2) + ",";
-  payload += "\"motor\":" +
-             String(motorState ? 1 : 0) + ",";
-  payload += "\"led\":" +
-             String(ledState ? 1 : 0) + ",";
-  payload += "\"mqtt\":" +
-             String(mqttOK ? 1 : 0);
-
-  payload += "}";
-
-  mqttClient.publish(
-    MQTT_TELEMETRY,
-    payload.c_str()
-  );
+  humidity =
+    h;
 }
 
 // ============================================================
-// MODBUS SLAVE
+// SEND MODBUS RESPONSE
 // ============================================================
 
-void handleModbus()
+void sendResponse(
+  uint8_t* frame,
+  uint8_t length
+)
 {
-  // We need at least 8 bytes for a standard request:
-  //
-  // [ID]
-  // [Function]
-  // [Start Hi]
-  // [Start Lo]
-  // [Quantity Hi]
-  // [Quantity Lo]
-  // [CRC Lo]
-  // [CRC Hi]
-
-  if (RS485Serial.available() < 8)
-  {
-    return;
-  }
-
-  uint8_t request[8];
-
-  for (int i = 0; i < 8; i++)
-  {
-    request[i] = RS485Serial.read();
-  }
-
-  // Validate slave ID
-  if (request[0] != SLAVE_ID)
-  {
-    return;
-  }
-
-  // Only Function 03 is supported
-  if (request[1] != 0x03)
-  {
-    return;
-  }
-
-  // Validate CRC
-  uint16_t receivedCRC =
-    request[6] |
-    ((uint16_t)request[7] << 8);
-
-  uint16_t calculatedCRC =
-    modbusCRC(request, 6);
-
-  if (receivedCRC != calculatedCRC)
-  {
-    Serial.println("Machine 02: Modbus CRC error.");
-    return;
-  }
-
-  // Requested quantity
-  uint16_t quantity =
-    ((uint16_t)request[4] << 8) |
-    request[5];
-
-  // Machine 01 requests 4 registers
-  if (quantity != 4)
-  {
-    return;
-  }
-
-  // ----------------------------------------------------------
-  // Four registers
-  //
-  // Register 0 = Temperature x10
-  // Register 1 = Humidity x10
-  // Register 2 = Motor
-  // Register 3 = LED
-  // ----------------------------------------------------------
-
-  uint16_t tempValue =
-    (uint16_t)(temperature * 10.0);
-
-  uint16_t humidityValue =
-    (uint16_t)(humidity * 10.0);
-
-  uint16_t motorValue =
-    motorState ? 1 : 0;
-
-  uint16_t ledValue =
-    ledState ? 1 : 0;
-
-  uint8_t response[13];
-
-  response[0] = SLAVE_ID;
-  response[1] = 0x03;
-  response[2] = 8;
-
-  response[3] = tempValue >> 8;
-  response[4] = tempValue & 0xFF;
-
-  response[5] = humidityValue >> 8;
-  response[6] = humidityValue & 0xFF;
-
-  response[7] = motorValue >> 8;
-  response[8] = motorValue & 0xFF;
-
-  response[9] = ledValue >> 8;
-  response[10] = ledValue & 0xFF;
-
-  uint16_t crc =
-    modbusCRC(response, 11);
-
-  response[11] = crc & 0xFF;
-  response[12] = crc >> 8;
-
-  // ----------------------------------------------------------
-  // Send response
-  // ----------------------------------------------------------
-
-  rs485TransmitMode();
+  rs485Transmit();
 
   delayMicroseconds(100);
 
   RS485Serial.write(
-    response,
-    13
+    frame,
+    length
   );
 
   RS485Serial.flush();
 
-  delayMicroseconds(300);
+  delayMicroseconds(100);
 
-  rs485ReceiveMode();
+  rs485Receive();
+}
 
-  Serial.println(
-    "Machine 02: Modbus response sent."
+// ============================================================
+// PROCESS MODBUS
+// ============================================================
+
+void processModbus()
+{
+  if (
+    RS485Serial.available() <
+    8
+  )
+    return;
+
+  uint8_t request[8];
+
+  for (
+    uint8_t i = 0;
+    i < 8;
+    i++
+  )
+  {
+    request[i] =
+      RS485Serial.read();
+  }
+
+  uint16_t receivedCRC =
+    request[6] |
+    (
+      (uint16_t)
+      request[7]
+      << 8
+    );
+
+  uint16_t calculatedCRC =
+    modbusCRC(
+      request,
+      6
+    );
+
+  if (
+    receivedCRC !=
+    calculatedCRC
+  )
+    return;
+
+  if (
+    request[0] !=
+    SLAVE_ID
+  )
+    return;
+
+  // ==========================================================
+  // FUNCTION 06
+  // WRITE SINGLE REGISTER
+  // ==========================================================
+
+  if (
+    request[1] ==
+    0x06
+  )
+  {
+    uint16_t reg =
+      (
+        (uint16_t)
+        request[2]
+        << 8
+      ) |
+      request[3];
+
+    uint16_t value =
+      (
+        (uint16_t)
+        request[4]
+        << 8
+      ) |
+      request[5];
+
+    if (
+      reg == 10
+    )
+    {
+      lastMasterHeartbeat =
+        millis();
+
+      heartbeat++;
+
+      // ------------------------------------------------------
+      // STANDBY
+      // ------------------------------------------------------
+
+      if (
+        value == 0
+      )
+      {
+        if (!manualStop)
+        {
+          autoMode = true;
+
+          currentMode =
+            0;
+
+          applyMode(0);
+        }
+      }
+
+      // ------------------------------------------------------
+      // ACTIVE
+      // ------------------------------------------------------
+
+      else if (
+        value == 1
+      )
+      {
+        if (!manualStop)
+        {
+          autoMode = true;
+
+          currentMode =
+            1;
+
+          applyMode(1);
+        }
+      }
+
+      // ------------------------------------------------------
+      // SAFETY STOP
+      // ------------------------------------------------------
+
+      else if (
+        value == 2
+      )
+      {
+        autoMode = false;
+
+        applyMode(2);
+      }
+    }
+
+    // Echo write request
+    sendResponse(
+      request,
+      8
+    );
+
+    return;
+  }
+
+  // ==========================================================
+  // FUNCTION 03
+  // READ HOLDING REGISTERS
+  // ==========================================================
+
+  if (
+    request[1] ==
+    0x03
+  )
+  {
+    uint16_t startReg =
+      (
+        (uint16_t)
+        request[2]
+        << 8
+      ) |
+      request[3];
+
+    uint16_t quantity =
+      (
+        (uint16_t)
+        request[4]
+        << 8
+      ) |
+      request[5];
+
+    // We support registers 0-6
+    if (
+      startReg != 0 ||
+      quantity < 7
+    )
+      return;
+
+    lastMasterHeartbeat =
+      millis();
+
+    heartbeat++;
+
+    uint8_t response[17];
+
+    response[0] =
+      SLAVE_ID;
+
+    response[1] =
+      0x03;
+
+    response[2] =
+      14;
+
+    // --------------------------------------------------------
+    // Register 0
+    // Temperature x10
+    // --------------------------------------------------------
+
+    uint16_t reg0 =
+      (uint16_t)
+      (
+        temperature *
+        10
+      );
+
+    // --------------------------------------------------------
+    // Register 1
+    // Humidity x10
+    // --------------------------------------------------------
+
+    uint16_t reg1 =
+      (uint16_t)
+      (
+        humidity *
+        10
+      );
+
+    // --------------------------------------------------------
+    // Register 2
+    // Motor
+    // --------------------------------------------------------
+
+    uint16_t reg2 =
+      motorState
+      ? 1
+      : 0;
+
+    // --------------------------------------------------------
+    // Register 3
+    // Mode
+    // --------------------------------------------------------
+
+    uint16_t reg3 =
+      currentMode;
+
+    // --------------------------------------------------------
+    // Register 4
+    // Fault
+    // --------------------------------------------------------
+
+    uint16_t reg4 =
+      faultCode;
+
+    // --------------------------------------------------------
+    // Register 5
+    // Heartbeat
+    // --------------------------------------------------------
+
+    uint16_t reg5 =
+      heartbeat;
+
+    // --------------------------------------------------------
+    // Register 6
+    // Manual stop
+    // --------------------------------------------------------
+
+    uint16_t reg6 =
+      manualStop
+      ? 1
+      : 0;
+
+    response[3] =
+      highByte(reg0);
+
+    response[4] =
+      lowByte(reg0);
+
+    response[5] =
+      highByte(reg1);
+
+    response[6] =
+      lowByte(reg1);
+
+    response[7] =
+      highByte(reg2);
+
+    response[8] =
+      lowByte(reg2);
+
+    response[9] =
+      highByte(reg3);
+
+    response[10] =
+      lowByte(reg3);
+
+    response[11] =
+      highByte(reg4);
+
+    response[12] =
+      lowByte(reg4);
+
+    response[13] =
+      highByte(reg5);
+
+    response[14] =
+      lowByte(reg5);
+
+    response[15] =
+      highByte(reg6);
+
+    response[16] =
+      lowByte(reg6);
+
+    // --------------------------------------------------------
+    // CRC
+    // --------------------------------------------------------
+
+    uint16_t crc =
+      modbusCRC(
+        response,
+        15
+      );
+
+    uint8_t finalResponse[19];
+
+    for (
+      uint8_t i = 0;
+      i < 17;
+      i++
+    )
+    {
+      finalResponse[i] =
+        response[i];
+    }
+
+    finalResponse[17] =
+      lowByte(crc);
+
+    finalResponse[18] =
+      highByte(crc);
+
+    sendResponse(
+      finalResponse,
+      19
+    );
+
+    return;
+  }
+}
+
+// ============================================================
+// MASTER WATCHDOG
+// ============================================================
+
+void checkMasterHeartbeat()
+{
+  if (
+    millis() -
+    lastMasterHeartbeat >
+    MASTER_TIMEOUT
+  )
+  {
+    if (
+      motorState
+    )
+    {
+      Serial.println(
+        "MASTER HEARTBEAT LOST!"
+      );
+
+      setMotor(false);
+    }
+
+    currentMode =
+      2;
+
+    faultCode =
+      1;
+
+    autoMode =
+      false;
+  }
+}
+
+// ============================================================
+// BUTTON
+// ============================================================
+//
+// Machine 02:
+//
+// Press once:
+//      MOTOR OFF
+//
+// Press again:
+//      MOTOR can run again
+//
+// The automatic master coordination will decide whether
+// Machine 02 should be ACTIVE or STANDBY after restart.
+// ============================================================
+
+void handleButton()
+{
+  bool reading =
+    digitalRead(
+      BUTTON_PIN
+    );
+
+  if (
+    reading !=
+    lastButtonReading
+  )
+  {
+    lastButtonTime =
+      millis();
+  }
+
+  if (
+    millis() -
+    lastButtonTime >
+    BUTTON_DEBOUNCE
+  )
+  {
+    if (
+      reading !=
+      stableButtonState
+    )
+    {
+      stableButtonState =
+        reading;
+
+      if (
+        stableButtonState ==
+        LOW
+      )
+      {
+        // ----------------------------------------------------
+        // STOP
+        // ----------------------------------------------------
+
+        if (!manualStop)
+        {
+          manualStop =
+            true;
+
+          setMotor(false);
+
+          currentMode =
+            3;
+
+          faultCode =
+            0;
+
+          if (
+            mqttClient.connected()
+          )
+          {
+            mqttClient.publish(
+              TOPIC_EVENT,
+              "MACHINE 02 MANUAL STOP"
+            );
+          }
+
+          Serial.println(
+            "MACHINE 02 MANUAL STOP"
+          );
+        }
+
+        // ----------------------------------------------------
+        // START / RELEASE MANUAL STOP
+        // ----------------------------------------------------
+
+        else
+        {
+          manualStop =
+            false;
+
+          setMotor(false);
+
+          currentMode =
+            0;
+
+          faultCode =
+            0;
+
+          if (
+            mqttClient.connected()
+          )
+          {
+            mqttClient.publish(
+              TOPIC_EVENT,
+              "MACHINE 02 MANUAL START"
+            );
+          }
+
+          Serial.println(
+            "MACHINE 02 MANUAL START"
+          );
+        }
+      }
+    }
+  }
+
+  lastButtonReading =
+    reading;
+}
+
+// ============================================================
+// TELEMETRY
+// ============================================================
+
+void publishTelemetry()
+{
+  if (
+    !mqttClient.connected()
+  )
+    return;
+
+  char payload[700];
+
+  const char* modeText =
+    "STANDBY";
+
+  if (
+    currentMode ==
+    1
+  )
+  {
+    modeText =
+      "ACTIVE";
+  }
+  else if (
+    currentMode ==
+    2
+  )
+  {
+    modeText =
+      "SAFETY STOP";
+  }
+  else if (
+    currentMode ==
+    3
+  )
+  {
+    modeText =
+      "MANUAL STOP";
+  }
+
+  const char* faultText =
+    "NONE";
+
+  if (
+    faultCode ==
+    1
+  )
+  {
+    faultText =
+      "COMMUNICATION FAULT";
+  }
+  else if (
+    faultCode ==
+    2
+  )
+  {
+    faultText =
+      "MOTOR FAULT";
+  }
+
+  snprintf(
+    payload,
+    sizeof(payload),
+
+    "{"
+    "\"machine\":2,"
+    "\"temperature\":%.1f,"
+    "\"humidity\":%.1f,"
+    "\"motor\":%d,"
+    "\"led\":%d,"
+    "\"auto_mode\":%d,"
+    "\"manual_stop\":%d,"
+    "\"mode\":\"%s\","
+    "\"fault\":\"%s\","
+    "\"rs485\":1,"
+    "\"mqtt\":%d,"
+    "\"heartbeat\":%u"
+    "}",
+
+    temperature,
+    humidity,
+
+    motorState ? 1 : 0,
+    ledState ? 1 : 0,
+
+    autoMode ? 1 : 0,
+    manualStop ? 1 : 0,
+
+    modeText,
+    faultText,
+
+    mqttClient.connected()
+      ? 1
+      : 0,
+
+    heartbeat
+  );
+
+  mqttClient.publish(
+    TOPIC_TELEMETRY,
+    payload
   );
 }
 
@@ -427,35 +1252,59 @@ void handleModbus()
 
 void setup()
 {
-  Serial.begin(115200);
+  Serial.begin(
+    115200
+  );
 
   delay(1000);
 
   Serial.println();
-  Serial.println("====================================");
-  Serial.println(" MACHINE 02 STARTING");
-  Serial.println(" MODBUS RTU SLAVE ID: 2");
-  Serial.println("====================================");
 
-  // Hardware
-  pinMode(LED_PIN, OUTPUT);
-  pinMode(RELAY_PIN, OUTPUT);
-  pinMode(RS485_DE_RE, OUTPUT);
+  Serial.println(
+    "========================================"
+  );
 
-  // Initial states
-  digitalWrite(LED_PIN, LOW);
-  digitalWrite(RELAY_PIN, LOW);
+  Serial.println(
+    " SMART MACHINE COMMUNICATION SYSTEM"
+  );
 
-  motorState = false;
-  ledState = false;
+  Serial.println(
+    " MACHINE 02 - SLAVE"
+  );
 
-  // RS-485 receive mode
-  rs485ReceiveMode();
+  Serial.println(
+    "========================================"
+  );
 
-  // DHT11
-  dht.begin();
+  pinMode(
+    BUTTON_PIN,
+    INPUT_PULLUP
+  );
 
-  // RS-485 UART
+  pinMode(
+    LED_PIN,
+    OUTPUT
+  );
+
+  pinMode(
+    RELAY_PIN,
+    OUTPUT
+  );
+
+  pinMode(
+    RS485_DE_RE,
+    OUTPUT
+  );
+
+  digitalWrite(
+    LED_PIN,
+    LOW
+  );
+
+  setMotor(false);
+
+  rs485Receive();
+
   RS485Serial.begin(
     9600,
     SERIAL_8N1,
@@ -463,22 +1312,23 @@ void setup()
     RS485_TX
   );
 
-  // MQTT
+  dht.begin();
+
   mqttClient.setServer(
     MQTT_SERVER,
     MQTT_PORT
   );
 
-  // Wi-Fi
-  WiFi.mode(WIFI_STA);
-
-  WiFi.begin(
-    WIFI_SSID,
-    WIFI_PASSWORD
+  mqttClient.setCallback(
+    mqttCallback
   );
 
-  Serial.println("Machine 02 READY.");
-  Serial.println("Waiting for Modbus requests...");
+  lastMasterHeartbeat =
+    millis();
+
+  Serial.println(
+    "Machine 02 ready."
+  );
 }
 
 // ============================================================
@@ -487,48 +1337,48 @@ void setup()
 
 void loop()
 {
-  // ==========================================================
-  // IMPORTANT:
-  // MODBUS IS HANDLED FIRST AND CONTINUOUSLY.
-  // ==========================================================
+  connectWiFi();
+  connectMQTT();
 
-  handleModbus();
-
-  // ----------------------------------------------------------
-  // Wi-Fi
-  // ----------------------------------------------------------
-
-  handleWiFi();
-
-  // ----------------------------------------------------------
-  // MQTT
-  // ----------------------------------------------------------
-
-  handleMQTT();
-
-  // ----------------------------------------------------------
-  // DHT11
-  // ----------------------------------------------------------
-
-  if (millis() - lastSensorRead >= SENSOR_INTERVAL)
+  if (
+    mqttClient.connected()
+  )
   {
-    lastSensorRead = millis();
-
-    readDHT11();
+    mqttClient.loop();
   }
 
-  // ----------------------------------------------------------
-  // MQTT telemetry
-  // ----------------------------------------------------------
+  processModbus();
 
-  if (millis() - lastTelemetry >= TELEMETRY_INTERVAL)
+  handleButton();
+
+  checkMasterHeartbeat();
+
+  unsigned long now =
+    millis();
+
+  // DHT
+  if (
+    now -
+    lastSensorRead >=
+    SENSOR_INTERVAL
+  )
   {
-    lastTelemetry = millis();
+    lastSensorRead =
+      now;
+
+    readDHT();
+  }
+
+  // Telemetry
+  if (
+    now -
+    lastTelemetry >=
+    TELEMETRY_INTERVAL
+  )
+  {
+    lastTelemetry =
+      now;
 
     publishTelemetry();
   }
-
-  // Very small delay
-  // Keeps the loop responsive to RS-485.
-  delay(2);
 }

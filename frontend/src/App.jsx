@@ -63,6 +63,8 @@ import {
 /* ---------------- MQTT CONFIGURATION ---------------- */
 
 const MQTT_URL = "wss://test.mosquitto.org:8081/mqtt";
+const API_URL = "https://smart-machine-communication.onrender.com";
+const API_STATUS_URL = `${API_URL}/api/status`;
 
 const TOPICS = {
   machine01Telemetry: "smart-machine/machine01/telemetry",
@@ -200,6 +202,7 @@ export default function App() {
   const [mqttConnected, setMqttConnected] = useState(false);
   const [mqttConnecting, setMqttConnecting] = useState(false);
   const [mqttError, setMqttError] = useState("");
+  const [apiConnected, setApiConnected] = useState(false);
 
   const [rs485Status, setRs485Status] = useState("Waiting");
   const [activeProtocol, setActiveProtocol] = useState("—");
@@ -236,6 +239,74 @@ export default function App() {
     };
 
     setEvents((previous) => [event, ...previous].slice(0, 50));
+  };
+
+  /* =========================================================
+     FLASK API STATUS
+     ========================================================= */
+
+  const checkBackendAPI = async () => {
+    try {
+      const response = await fetch(API_STATUS_URL, {
+        method: "GET",
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+      });
+
+      if (!response.ok) {
+        throw new Error(`Backend HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+      setApiConnected(true);
+
+      const communication = data?.rs485;
+      if (communication !== undefined && communication !== null) {
+        const healthy = normalizeBoolean(communication) ||
+          String(communication).toLowerCase().includes("healthy") ||
+          String(communication).toLowerCase().includes("connected") ||
+          String(communication).toLowerCase().includes("active");
+        setRs485Status(healthy ? "Healthy" : String(communication));
+      }
+
+      if (data?.modbus !== undefined && data?.modbus !== null) {
+        const modbusHealthy = normalizeBoolean(data.modbus) ||
+          String(data.modbus).toLowerCase().includes("connected") ||
+          String(data.modbus).toLowerCase().includes("active") ||
+          String(data.modbus).toLowerCase().includes("healthy");
+        setActiveProtocol(modbusHealthy ? "Modbus RTU" : String(data.modbus));
+      }
+
+      if (data?.failover !== undefined && data?.failover !== null) {
+        setFailoverStatus(String(data.failover));
+      }
+
+      const applyApiMachine = (current, incoming, machineName) => {
+        if (!incoming) return current;
+        const lastUpdate = incoming.last_update ? new Date(incoming.last_update) : null;
+        const recent = lastUpdate && !Number.isNaN(lastUpdate.getTime())
+          ? Date.now() - lastUpdate.getTime() < 30000
+          : current.online;
+
+        return {
+          ...current,
+          online: recent || current.online,
+          temperature: Number.isFinite(Number(incoming.temperature)) ? Number(incoming.temperature) : current.temperature,
+          humidity: Number.isFinite(Number(incoming.humidity)) ? Number(incoming.humidity) : current.humidity,
+          motor: incoming.motor !== undefined ? normalizeBoolean(incoming.motor) : current.motor,
+          led: incoming.led !== undefined ? normalizeBoolean(incoming.led) : current.led,
+          communication: incoming.status && incoming.status !== "waiting" ? String(incoming.status) : current.communication,
+          protocol: machineName === "Machine 01" ? (current.protocol === "—" ? "MQTT / Modbus" : current.protocol) : current.protocol,
+          lastSeen: recent && lastUpdate ? lastUpdate : current.lastSeen,
+        };
+      };
+
+      setMachine01((current) => applyApiMachine(current, data.machine01, "Machine 01"));
+      setMachine02((current) => applyApiMachine(current, data.machine02, "Machine 02"));
+    } catch (error) {
+      console.error("Backend API error:", error);
+      setApiConnected(false);
+    }
   };
 
   /* =========================================================
@@ -364,12 +435,21 @@ export default function App() {
     const data = safeJsonParse(rawMessage);
 
     if (!data) {
+      if (topic === TOPICS.systemCommunication) {
+        handleCommunication(rawMessage);
+        return;
+      }
+
+      if (topic === TOPICS.systemFailover) {
+        handleFailover(rawMessage);
+        return;
+      }
+
       addEvent(
         "INFO",
         `Received non-JSON MQTT message on ${topic}`,
         "MQTT"
       );
-
       return;
     }
 
@@ -540,6 +620,46 @@ export default function App() {
       machineId === "machine01" ? "Machine 01" : "Machine 02"
     );
 
+    /* ---------------- MACHINE 02 DATA EMBEDDED IN MACHINE 01 ---------------- */
+    if (machineId === "machine01") {
+      const machine02Temperature = getNumber(
+        data,
+        ["machine02_temperature", "machine02Temperature"],
+        null
+      );
+      const machine02Humidity = getNumber(
+        data,
+        ["machine02_humidity", "machine02Humidity"],
+        null
+      );
+
+      if (machine02Temperature !== null || machine02Humidity !== null) {
+        const machine02Motor = getBoolean(data, ["machine02_motor", "machine02Motor"], false);
+        const machine02Led = getBoolean(data, ["machine02_led", "machine02Led"], false);
+        const machine02Healthy = machine02Temperature !== null || machine02Humidity !== null;
+
+        setMachine02((previous) => ({
+          ...previous,
+          online: machine02Healthy,
+          temperature: machine02Temperature ?? previous.temperature,
+          humidity: machine02Humidity ?? previous.humidity,
+          motor: machine02Motor,
+          led: machine02Led,
+          communication: machine02Healthy ? "Connected" : previous.communication,
+          protocol: "RS-485 / Modbus RTU",
+          lastSeen: now,
+          error: null,
+        }));
+
+        setRs485Status(getBoolean(data, ["rs485"], false) ? "Healthy" : "Waiting");
+        setActiveProtocol(getBoolean(data, ["rs485"], false) ? "Modbus RTU" : "—");
+      }
+
+      if (data.mqtt !== undefined) {
+        setMqttConnected(normalizeBoolean(data.mqtt));
+      }
+    }
+
     /* ---------------- GRAPH DATA ---------------- */
 
     setTemperatureHistory((previous) => {
@@ -667,22 +787,32 @@ export default function App() {
      ========================================================= */
 
   const handleCommunication = (data) => {
-    const status =
-      getValue(
-        data,
-        ["status", "state"],
-        "Unknown"
-      );
+    if (typeof data === "string") {
+      const message = data.toLowerCase();
+      const healthy =
+        message.includes("healthy") ||
+        message.includes("online") ||
+        message.includes("connected") ||
+        message.includes("success");
 
-    const protocol =
-      getValue(
-        data,
-        ["protocol", "activeProtocol"],
-        "—"
-      );
+      if (message.includes("mqtt")) {
+        setMqttConnected(healthy);
+      }
 
-    setRs485Status(status);
-    setActiveProtocol(protocol);
+      if (message.includes("rs-485") || message.includes("modbus")) {
+        setRs485Status(healthy ? "Healthy" : "Offline");
+        setActiveProtocol(message.includes("modbus") || message.includes("rs-485") ? "Modbus RTU" : "—");
+      }
+
+      addEvent(healthy ? "COMMUNICATION" : "WARNING", data, "System");
+      return;
+    }
+
+    const status = getValue(data, ["status", "state"], "Unknown");
+    const protocol = getValue(data, ["protocol", "activeProtocol"], "—");
+
+    setRs485Status(String(status));
+    setActiveProtocol(String(protocol));
 
     addEvent(
       "COMMUNICATION",
@@ -696,33 +826,31 @@ export default function App() {
      ========================================================= */
 
   const handleFailover = (data) => {
-    const status =
-      getValue(
-        data,
-        ["status", "state"],
-        "Standby"
-      );
+    if (typeof data === "string") {
+      const message = data.toLowerCase();
+      const active = message.includes("failover") && !message.includes("normal");
+      const restored = message.includes("restored") || message.includes("normal") || message.includes("healthy");
+      const status = restored ? "Normal" : active ? "Active" : data;
 
-    const protocol =
-      getValue(
-        data,
-        ["protocol", "activeProtocol"],
-        null
-      );
+      setFailoverStatus(status);
+      if (active && !restored) {
+        setRs485Status("Failed");
+        setActiveProtocol("MQTT");
+      }
 
-    setFailoverStatus(status);
-
-    if (protocol) {
-      setActiveProtocol(protocol);
+      addEvent(active && !restored ? "WARNING" : "INFO", data, "System");
+      return;
     }
 
+    const status = getValue(data, ["status", "state"], "Standby");
+    const protocol = getValue(data, ["protocol", "activeProtocol"], null);
+
+    setFailoverStatus(String(status));
+    if (protocol) setActiveProtocol(String(protocol));
+
     addEvent(
-      status.toLowerCase().includes("fail")
-        ? "WARNING"
-        : "INFO",
-      `Failover status: ${status}${
-        protocol ? ` | Active protocol: ${protocol}` : ""
-      }`,
+      String(status).toLowerCase().includes("fail") ? "WARNING" : "INFO",
+      `Failover status: ${status}${protocol ? ` | Active protocol: ${protocol}` : ""}`,
       "System"
     );
   };
@@ -743,6 +871,20 @@ export default function App() {
         }
       }
     };
+  }, []);
+
+  /* =========================================================
+     FLASK API POLLING
+     ========================================================= */
+
+  useEffect(() => {
+    checkBackendAPI();
+
+    const apiTimer = setInterval(() => {
+      checkBackendAPI();
+    }, 10000);
+
+    return () => clearInterval(apiTimer);
   }, []);
 
   /* =========================================================
@@ -1133,6 +1275,14 @@ export default function App() {
               }
               description="Backup / cloud communication channel"
               active={mqttConnected}
+            />
+
+            <CommunicationCard
+              icon={<Server size={21} />}
+              title="Flask API"
+              value={apiConnected ? "Connected" : "Disconnected"}
+              description="Live Render backend status API"
+              active={apiConnected}
             />
 
             <CommunicationCard
@@ -2635,7 +2785,7 @@ input {
 
 .communication-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 13px;
 }
 
